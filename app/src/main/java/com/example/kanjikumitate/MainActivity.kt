@@ -894,35 +894,51 @@ private fun loadKumitateQuestions(context: Context): List<KanjiKumitate> {
     val dataDirectory = context.getExternalFilesDir(null) ?: context.filesDir
     val jsonFile = File(dataDirectory, "kanji_questions.json")
     val targetConfig = loadQuestionTargetConfig(context)
+    val questionSource = context.assets.open("kanji_yomi_questions.json")
+        .bufferedReader()
+        .use { it.readText() }
+    val questionSourceHash = questionSource.hashCode()
     if (jsonFile.isFile) {
-        runCatching { readQuestionsFromJson(jsonFile.readText(), targetConfig.sourceHash) }
+        runCatching {
+            readQuestionsFromJson(
+                json = jsonFile.readText(),
+                expectedTargetConfigHash = targetConfig.sourceHash,
+                expectedQuestionSourceHash = questionSourceHash,
+            )
+        }
             .getOrNull()
             ?.let { return it }
     }
 
-    val generatedQuestions = buildQuestionsFromSourceData(context, targetConfig)
-    runCatching { writeQuestionsToJson(jsonFile, generatedQuestions, targetConfig.sourceHash) }
+    val generatedQuestions = buildQuestionsFromSourceData(context, targetConfig, questionSource)
+    runCatching {
+        writeQuestionsToJson(
+            file = jsonFile,
+            questions = generatedQuestions,
+            targetConfigHash = targetConfig.sourceHash,
+            questionSourceHash = questionSourceHash,
+        )
+    }
     return generatedQuestions
 }
 
 private fun buildQuestionsFromSourceData(
     context: Context,
     targetConfig: QuestionTargetConfig,
+    questionSource: String,
 ): List<KanjiKumitate> {
     val idsByKanji = loadIdsData(context)
     val reverseIds = idsByKanji.entries.associate { (kanji, ids) -> ids to kanji }
     val distractorPool = listOf("亻", "木", "日", "月", "口", "心", "力", "土", "山", "石", "田", "女", "子", "言", "糸", "氵", "艹")
 
-    val source = context.assets.open("kanji_yomi_questions.json")
-        .bufferedReader()
-        .use { it.readText() }
-    val root = JSONObject(source)
+    val root = JSONObject(questionSource)
     require(root.optInt("schemaVersion") == 1)
     val sourceQuestions = root.getJSONArray("questions")
 
     return buildList {
         repeat(sourceQuestions.length()) { index ->
             val item = sourceQuestions.getJSONObject(index)
+            if (!item.optBoolean("vaild", true)) return@repeat
             val grade = item.optInt("grade").takeIf { it in 1..6 } ?: return@repeat
             val target = item.optString("target")
             val reading = item.optString("reading")
@@ -966,10 +982,15 @@ private fun buildQuestionsFromSourceData(
     }
 }
 
-private fun readQuestionsFromJson(json: String, expectedTargetConfigHash: Int): List<KanjiKumitate> {
+private fun readQuestionsFromJson(
+    json: String,
+    expectedTargetConfigHash: Int,
+    expectedQuestionSourceHash: Int,
+): List<KanjiKumitate> {
     val root = JSONObject(json)
     require(root.optInt("schemaVersion") == QUESTION_SCHEMA_VERSION)
     require(root.optInt("targetConfigHash") == expectedTargetConfigHash)
+    require(root.optInt("questionSourceHash") == expectedQuestionSourceHash)
     val questions = root.getJSONArray("questions")
     return buildList {
         repeat(questions.length()) { index ->
@@ -998,6 +1019,7 @@ private fun writeQuestionsToJson(
     file: File,
     questions: List<KanjiKumitate>,
     targetConfigHash: Int,
+    questionSourceHash: Int,
 ) {
     val items = JSONArray()
     questions.forEach { question ->
@@ -1018,6 +1040,7 @@ private fun writeQuestionsToJson(
     val root = JSONObject()
         .put("schemaVersion", QUESTION_SCHEMA_VERSION)
         .put("targetConfigHash", targetConfigHash)
+        .put("questionSourceHash", questionSourceHash)
         .put("questions", items)
     file.parentFile?.mkdirs()
     val temporaryFile = File(file.parentFile, "${file.name}.tmp")
@@ -1142,7 +1165,7 @@ private fun String.isDeviceSafeKanjiPart(): Boolean {
     }
 }
 
-private const val QUESTION_SCHEMA_VERSION = 6
+private const val QUESTION_SCHEMA_VERSION = 7
 private val IDS_OPERATORS = setOf('⿰', '⿱', '⿲', '⿳', '⿴', '⿵', '⿶', '⿷', '⿸', '⿹', '⿺', '⿻')
 
 private fun String.stripRubyMarkers(): String = filterNot { it == '[' || it == ']' || it == '{' || it == '}' }

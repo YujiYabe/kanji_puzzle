@@ -14,7 +14,7 @@
 
 ## 問題データ
 
-問題文の元データは `app/src/main/assets/kanji_yomi_questions.json` に保存されています。`questions` の各要素は `grade`、`target`、`reading`、`sentence`、`sentenceReading`、`english`、`spanish` を持ちます。
+問題文の元データは `app/src/main/assets/kanji_yomi_questions.json` に保存されています。`questions` の各要素は `grade`、`target`、`reading`、`sentence`、`sentenceReading`、`english`、`spanish`、`vaild` を持ちます。`vaild` は省略時も有効で、`false` にするとその問題を出題対象から除外します。
 
 出題対象は `app/src/main/assets/question_targets.json` で学年別に管理します。
 
