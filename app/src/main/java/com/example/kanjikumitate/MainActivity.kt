@@ -1,6 +1,7 @@
 package com.example.kanjikumitate
 
 import android.content.Context
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.os.Bundle
@@ -9,7 +10,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -31,8 +31,6 @@ import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -66,11 +64,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
@@ -161,6 +163,9 @@ private fun KanjiKumitateScreen(modifier: Modifier = Modifier) {
     var selectedGrade by rememberSaveable { mutableIntStateOf(1) }
     var questionCount by rememberSaveable { mutableIntStateOf(10) }
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val isLandscapeTablet = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE &&
+        configuration.smallestScreenWidthDp >= 600
     val rootView = LocalView.current
     val textRecognizer = remember {
         TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
@@ -185,6 +190,8 @@ private fun KanjiKumitateScreen(modifier: Modifier = Modifier) {
         }
     }
     var canvasBounds by remember(puzzleIndex) { mutableStateOf(Rect.Zero) }
+    var buildAreaHeightPx by remember { mutableIntStateOf(0) }
+    val buildAreaHeight = with(LocalDensity.current) { buildAreaHeightPx.toDp() }
     val scrollState = rememberScrollState()
 
     DisposableEffect(textRecognizer) {
@@ -213,7 +220,10 @@ private fun KanjiKumitateScreen(modifier: Modifier = Modifier) {
             .padding(18.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Header(score = score)
+        Header(
+            score = score,
+            puzzle = currentPuzzle.takeIf { appScreen == AppScreen.Quiz },
+        )
 
         when (appScreen) {
             AppScreen.Settings -> SettingsScreen(
@@ -235,57 +245,37 @@ private fun KanjiKumitateScreen(modifier: Modifier = Modifier) {
             )
 
             AppScreen.Quiz -> if (currentPuzzle != null) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.Top,
-            ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    Text(
-                        text = "${puzzleIndex + 1} / ${sessionPuzzles.size}問",
-                        modifier = Modifier.fillMaxWidth(),
-                        color = Color(0xFF49645C),
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.End,
-                    )
-                    QuestionCard(currentPuzzle)
-                    OutlinedButton(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            selectedParts.indices.forEach { selectedParts[it] = null }
-                            placedPartPositions.indices.forEach { placedPartPositions[it] = null }
-                            judgeState = JudgeState.Playing
-                        },
-                        contentPadding = PaddingValues(vertical = 14.dp),
-                    ) {
-                        Text("やりなおす")
+                val tiles = remember(currentPuzzle) {
+                    (currentPuzzle.parts + currentPuzzle.distractors).shuffled()
+                }
+                val goToNextQuestion = {
+                    if (puzzleIndex + 1 >= sessionPuzzles.size) {
+                        appScreen = AppScreen.Result
+                    } else {
+                        puzzleIndex += 1
+                        judgeState = JudgeState.Playing
                     }
                 }
+                val inputArea: @Composable () -> Unit = {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
 
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    val tiles = remember(currentPuzzle) {
-                        (currentPuzzle.parts + currentPuzzle.distractors).shuffled()
-                    }
-
-                    BuildArea(
-                        selectedParts = selectedParts,
-                        placedPartPositions = placedPartPositions,
-                        onRemoveLast = {
-                            val lastFilledIndex = selectedParts.indexOfLast { it != null }
-                            if (lastFilledIndex >= 0) {
-                                selectedParts[lastFilledIndex] = null
-                                placedPartPositions[lastFilledIndex] = null
-                                judgeState = JudgeState.Playing
-                            }
-                        },
-                        onCanvasPositioned = { canvasBounds = it },
-                    )
+                        BuildArea(
+                            selectedParts = selectedParts,
+                            placedPartPositions = placedPartPositions,
+                            onRemoveLast = {
+                                val lastFilledIndex = selectedParts.indexOfLast { it != null }
+                                if (lastFilledIndex >= 0) {
+                                    selectedParts[lastFilledIndex] = null
+                                    placedPartPositions[lastFilledIndex] = null
+                                    judgeState = JudgeState.Playing
+                                }
+                            },
+                            onCanvasPositioned = { canvasBounds = it },
+                            onHeightChanged = { buildAreaHeightPx = it },
+                        )
 
                     FlowRow(
                         modifier = Modifier.fillMaxWidth(),
@@ -334,67 +324,112 @@ private fun KanjiKumitateScreen(modifier: Modifier = Modifier) {
                         }
                     }
 
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = {
-                            val bitmap = captureViewArea(rootView, canvasBounds)
-                            if (bitmap == null) {
-                                judgeState = JudgeState.Wrong
-                            } else {
-                                isRecognizing = true
-                                textRecognizer.process(InputImage.fromBitmap(bitmap, 0))
-                                    .addOnSuccessListener { result ->
-                                        val recognized = result.text
-                                            .filterNot { it.isWhitespace() }
-                                            .normalizeForOcrComparison()
-                                        val ocrMatches = recognized.contains(
-                                            currentPuzzle.target.normalizeForOcrComparison(),
-                                        )
-                                        val structureMatches = isRecognizableCompositionFallback(
-                                            puzzle = currentPuzzle,
-                                            selectedParts = selectedParts,
-                                            positions = placedPartPositions,
-                                        )
-                                        judgeState = if (
-                                            ocrMatches || structureMatches
-                                        ) {
-                                            score += 10
-                                            JudgeState.Correct
-                                        } else {
-                                            JudgeState.Wrong
-                                        }
-                                    }
-                                    .addOnFailureListener {
-                                        judgeState = JudgeState.Wrong
-                                    }
-                                    .addOnCompleteListener {
-                                        isRecognizing = false
-                                        bitmap.recycle()
-                                    }
-                            }
-                        },
-                        enabled = selectedParts.all { it != null } &&
-                            judgeState != JudgeState.Correct &&
-                            !isRecognizing,
-                        contentPadding = PaddingValues(vertical = 14.dp),
-                    ) {
-                        Text(if (isRecognizing) "OCRで判定中…" else "こたえあわせ")
                     }
-
+                }
+                val actionArea: @Composable (Boolean) -> Unit = { reserveRightColumn ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(
+                            if (reserveRightColumn) 14.dp else 12.dp,
+                        ),
+                    ) {
+                        Button(
+                            modifier = Modifier.weight(1f),
+                            onClick = {
+                                val bitmap = captureViewArea(rootView, canvasBounds)
+                                if (bitmap == null) {
+                                    judgeState = JudgeState.Wrong
+                                } else {
+                                    isRecognizing = true
+                                    textRecognizer.process(InputImage.fromBitmap(bitmap, 0))
+                                        .addOnSuccessListener { result ->
+                                            val recognized = result.text
+                                                .filterNot { it.isWhitespace() }
+                                                .normalizeForOcrComparison()
+                                            val ocrMatches = recognized.contains(
+                                                currentPuzzle.target.normalizeForOcrComparison(),
+                                            )
+                                            val structureMatches = isRecognizableCompositionFallback(
+                                                puzzle = currentPuzzle,
+                                                selectedParts = selectedParts,
+                                                positions = placedPartPositions,
+                                            )
+                                            judgeState = if (ocrMatches || structureMatches) {
+                                                score += 10
+                                                JudgeState.Correct
+                                            } else {
+                                                JudgeState.Wrong
+                                            }
+                                        }
+                                        .addOnFailureListener {
+                                            judgeState = JudgeState.Wrong
+                                        }
+                                        .addOnCompleteListener {
+                                            isRecognizing = false
+                                            bitmap.recycle()
+                                        }
+                                }
+                            },
+                            enabled = selectedParts.all { it != null } &&
+                                judgeState != JudgeState.Correct &&
+                                !isRecognizing,
+                            contentPadding = PaddingValues(vertical = 14.dp),
+                        ) {
+                            Text(if (isRecognizing) "OCRで判定中…" else "こたえあわせ")
+                        }
+                        if (judgeState == JudgeState.Correct) {
+                            Button(
+                                onClick = goToNextQuestion,
+                                modifier = Modifier.weight(1f),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFF257B58),
+                                ),
+                                contentPadding = PaddingValues(vertical = 14.dp),
+                            ) {
+                                Text("つぎの問題")
+                            }
+                        } else if (reserveRightColumn) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+                val feedbackArea: @Composable () -> Unit = {
                     FeedbackPanel(
                         puzzle = currentPuzzle,
                         judgeState = judgeState,
-                        onNext = {
-                            if (puzzleIndex + 1 >= sessionPuzzles.size) {
-                                appScreen = AppScreen.Result
-                            } else {
-                                puzzleIndex += 1
-                                judgeState = JudgeState.Playing
-                            }
+                        modifier = if (isLandscapeTablet && buildAreaHeightPx > 0) {
+                            Modifier.height(buildAreaHeight)
+                        } else {
+                            Modifier
                         },
                     )
                 }
-            }
+
+                if (isLandscapeTablet) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
+                            verticalAlignment = Alignment.Top,
+                        ) {
+                            Box(modifier = Modifier.weight(1f)) { inputArea() }
+                            Box(modifier = Modifier.weight(1f)) { feedbackArea() }
+                        }
+                        actionArea(true)
+                    }
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        inputArea()
+                        actionArea(false)
+                        feedbackArea()
+                    }
+                }
             }
 
             AppScreen.Result -> ResultScreen(
@@ -526,24 +561,38 @@ private fun ResultScreen(
 }
 
 @Composable
-private fun Header(score: Int) {
+private fun Header(score: Int, puzzle: KanjiKumitate?) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = if (puzzle != null) {
+            Arrangement.SpaceBetween
+        } else {
+            Arrangement.End
+        },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column {
+        if (puzzle != null) {
             Text(
-                text = "漢字くみたて",
-                fontSize = 32.sp,
-                fontWeight = FontWeight.Black,
-                color = Color(0xFF1D3C34),
+                text = buildAnnotatedString {
+                    append(puzzle.promptBefore)
+                    append("「")
+                    withStyle(
+                        SpanStyle(
+                            color = Color(0xFFD12B1F),
+                            fontWeight = FontWeight.Black,
+                        ),
+                    ) {
+                        append(puzzle.targetKana)
+                    }
+                    append("」")
+                    append(puzzle.promptAfter)
+                },
+                modifier = Modifier.weight(1f),
+                fontSize = 22.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFF203832),
             )
-            Text(
-                text = "部品をえらんで、漢字を完成させよう",
-                color = Color(0xFF49645C),
-                fontWeight = FontWeight.SemiBold,
-            )
+            Spacer(modifier = Modifier.width(16.dp))
         }
         Surface(
             shape = RoundedCornerShape(8.dp),
@@ -561,64 +610,17 @@ private fun Header(score: Int) {
 }
 
 @Composable
-private fun QuestionCard(puzzle: KanjiKumitate) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        colors = CardDefaults.cardColors(containerColor = Color.White),
-        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
-    ) {
-        Column(
-            modifier = Modifier.padding(18.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = "問題",
-                color = Color(0xFF3F6F5F),
-                fontWeight = FontWeight.Bold,
-            )
-            Text(
-                text = buildAnnotatedString {
-                    append(puzzle.promptBefore)
-                    append("「")
-                    withStyle(
-                        SpanStyle(
-                            color = Color(0xFFD12B1F),
-                            fontWeight = FontWeight.Black,
-                        ),
-                    ) {
-                        append(puzzle.targetKana)
-                    }
-                    append("」")
-                    append(puzzle.promptAfter)
-                },
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color(0xFF203832),
-            )
-            Text(
-                text = "よみ: ${puzzle.reading}",
-                color = Color(0xFF52645F),
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = "ヒント: ${puzzle.hint}",
-                color = Color(0xFF7A5A00),
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
-    }
-}
-
-@Composable
 private fun BuildArea(
     selectedParts: List<String?>,
     placedPartPositions: List<Offset?>,
     onRemoveLast: () -> Unit,
     onCanvasPositioned: (Rect) -> Unit,
+    onHeightChanged: (Int) -> Unit,
 ) {
     Card(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .onSizeChanged { onHeightChanged(it.height) },
         shape = RoundedCornerShape(8.dp),
         colors = CardDefaults.cardColors(containerColor = Color(0xFFFDF7DF)),
         border = BorderStroke(2.dp, Color(0xFFD9BE5F)),
@@ -663,6 +665,7 @@ private fun BuildArea(
                             Text(
                                 text = part,
                                 fontSize = 72.sp,
+                                fontFamily = FontFamily.Serif,
                                 fontWeight = FontWeight.Black,
                                 color = Color(0xFF222222),
                                 textAlign = TextAlign.Center,
@@ -738,6 +741,7 @@ private fun PartTile(
         Text(
             text = text,
             fontSize = if (isDragging) 54.sp else 28.sp,
+            fontFamily = FontFamily.Serif,
             fontWeight = FontWeight.Black,
             color = if (enabled) Color(0xFF173A2D) else Color(0xFF909090),
             textAlign = TextAlign.Center,
@@ -745,21 +749,13 @@ private fun PartTile(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun FeedbackPanel(
     puzzle: KanjiKumitate,
     judgeState: JudgeState,
-    onNext: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     if (judgeState == JudgeState.Playing) return
-    val nextButtonRequester = remember { BringIntoViewRequester() }
-
-    LaunchedEffect(judgeState) {
-        if (judgeState == JudgeState.Correct) {
-            nextButtonRequester.bringIntoView()
-        }
-    }
 
     val (message, color) = when (judgeState) {
         JudgeState.Correct -> "正解。${puzzle.target} が完成しました" to Color(0xFF0F7C42)
@@ -768,15 +764,17 @@ private fun FeedbackPanel(
     }
 
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
         color = Color.White,
         border = BorderStroke(1.dp, Color(0xFFD6DED9)),
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         ) {
             Text(
                 text = message,
@@ -785,16 +783,6 @@ private fun FeedbackPanel(
                 textAlign = TextAlign.Center,
             )
             if (judgeState == JudgeState.Correct) {
-                Button(
-                    onClick = onNext,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .bringIntoViewRequester(nextButtonRequester),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF257B58)),
-                    contentPadding = PaddingValues(vertical = 12.dp),
-                ) {
-                    Text("つぎの問題")
-                }
                 Box(
                     modifier = Modifier
                         .size(96.dp)
@@ -805,6 +793,7 @@ private fun FeedbackPanel(
                     Text(
                         text = puzzle.target,
                         fontSize = 52.sp,
+                        fontFamily = FontFamily.Serif,
                         fontWeight = FontWeight.Black,
                         color = Color(0xFF1E2F28),
                     )
