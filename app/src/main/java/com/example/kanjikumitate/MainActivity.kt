@@ -115,6 +115,8 @@ private enum class CompositionLayout {
     Horizontal,
     Vertical,
     OneAboveTwo,
+    Overlay,
+    Surrounding,
 }
 
 private enum class JudgeState {
@@ -303,9 +305,9 @@ private fun KanjiKumitateScreen(modifier: Modifier = Modifier) {
                                     if (canvasBounds.contains(dropPosition)) {
                                         val normalizedDrop = Offset(
                                             ((dropPosition.x - canvasBounds.left) / canvasBounds.width)
-                                                .coerceIn(0.06f, 0.94f),
+                                                .coerceIn(0.08f, 0.92f),
                                             ((dropPosition.y - canvasBounds.top) / canvasBounds.height)
-                                                .coerceIn(0.10f, 0.90f),
+                                                .coerceIn(0.22f, 0.78f),
                                         )
                                         val existingCount = selectedParts.count { it == part }
                                         val slotIndex = if (existingCount >= allowedUseCount) {
@@ -652,10 +654,10 @@ private fun BuildArea(
                         Box(
                             modifier = Modifier
                                 .offset(
-                                    x = maxWidth * position.x - 40.dp,
-                                    y = maxHeight * position.y - 40.dp,
+                                    x = maxWidth * position.x - 60.dp,
+                                    y = maxHeight * position.y - 60.dp,
                                 )
-                                .size(80.dp),
+                                .size(120.dp),
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
@@ -1116,7 +1118,12 @@ private fun createIdsPuzzle(
             candidates.all(String::isDeviceSafeKanjiPart)
     } ?: return null
     val distractors = distractorPool.filterNot { it in parts }.take(2)
-    val layout = CompositionLayout.Horizontal
+    val layout = when (parsed.raw.firstOrNull()) {
+        '⿰', '⿲' -> CompositionLayout.Horizontal
+        '⿱', '⿳' -> CompositionLayout.Vertical
+        '⿻' -> CompositionLayout.Overlay
+        else -> CompositionLayout.Surrounding
+    }
     val hint = "完成した漢字に見えるよう、自由な位置に部品を置こう"
     return KanjiKumitate(
         target, "", 1, "", "", "", parts, distractors, hint,
@@ -1165,7 +1172,7 @@ private fun String.isDeviceSafeKanjiPart(): Boolean {
     }
 }
 
-private const val QUESTION_SCHEMA_VERSION = 7
+private const val QUESTION_SCHEMA_VERSION = 8
 private val IDS_OPERATORS = setOf('⿰', '⿱', '⿲', '⿳', '⿴', '⿵', '⿶', '⿷', '⿸', '⿹', '⿺', '⿻')
 
 private fun String.stripRubyMarkers(): String = filterNot { it == '[' || it == ']' || it == '{' || it == '}' }
@@ -1188,24 +1195,42 @@ private fun String.normalizeForOcrComparison(): String =
         .replace('+', '十')
         .replace('＋', '十')
 
-/**
- * OCR engines commonly classify a font-rendered 十 as a plus sign or return no
- * text. Accept it when the correct horizontal and vertical components actually
- * overlap; this remains position-sensitive without snapping to a fixed point.
- */
+/** Uses relative IDS geometry when OCR sees separate component glyphs. */
 private fun isRecognizableCompositionFallback(
     puzzle: KanjiKumitate,
     selectedParts: List<String?>,
     positions: List<Offset?>,
 ): Boolean {
-    if (puzzle.target != "十") return false
     if (selectedParts.filterNotNull().sorted() != puzzle.parts.sorted()) return false
 
-    val horizontalIndex = selectedParts.indexOfFirst { it == "一" }
-    val verticalIndex = selectedParts.indexOfFirst { it == "丨" || it == "｜" }
-    val horizontal = positions.getOrNull(horizontalIndex) ?: return false
-    val vertical = positions.getOrNull(verticalIndex) ?: return false
-    return (horizontal - vertical).getDistance() <= 0.22f
+    val unusedIndices = selectedParts.indices.toMutableList()
+    val orderedPositions = puzzle.parts.map { expectedPart ->
+        val index = unusedIndices.firstOrNull { selectedParts[it] == expectedPart } ?: return false
+        unusedIndices.remove(index)
+        positions.getOrNull(index) ?: return false
+    }
+    val xSpread = orderedPositions.maxOf { it.x } - orderedPositions.minOf { it.x }
+    val ySpread = orderedPositions.maxOf { it.y } - orderedPositions.minOf { it.y }
+
+    return when (puzzle.layout) {
+        CompositionLayout.Horizontal ->
+            orderedPositions.zipWithNext().all { (left, right) -> left.x + 0.02f < right.x } &&
+                ySpread <= 0.38f && xSpread <= 0.78f
+        CompositionLayout.Vertical ->
+            orderedPositions.zipWithNext().all { (top, bottom) -> top.y + 0.02f < bottom.y } &&
+                xSpread <= 0.38f && ySpread <= 0.78f
+        CompositionLayout.Overlay ->
+            orderedPositions.all { (it - orderedPositions.first()).getDistance() <= 0.24f }
+        CompositionLayout.Surrounding ->
+            orderedPositions.all { (it - orderedPositions.first()).getDistance() <= 0.42f }
+        CompositionLayout.OneAboveTwo -> {
+            if (orderedPositions.size != 3) return false
+            val top = orderedPositions[0]
+            val bottomLeft = orderedPositions[1]
+            val bottomRight = orderedPositions[2]
+            top.y < bottomLeft.y && top.y < bottomRight.y && bottomLeft.x < bottomRight.x
+        }
+    }
 }
 
 private val kumitateQuestionBank = listOf(
